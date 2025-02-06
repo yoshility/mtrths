@@ -130,38 +130,131 @@ def evaluate_thought_level(raw_data):
 
     return evaluation
 
+def inference(model, tokenizer, question, answer, ans_word, gen_probs):
+    device = "cuda:0"
+    # words = re.findall(r'\w+|[^\w\s]', answer)
+    words = ans_word
+    tokenized_input = tokenizer.encode_plus(
+        [question],
+        words,
+        add_special_tokens=True,
+        return_token_type_ids=True,
+        is_split_into_words=True,
+        truncation=True,
+        max_length=512
+    )
+    attention_mask = torch.tensor(tokenized_input['attention_mask']).reshape(1,-1).to(device)
+    input_ids = torch.tensor(tokenized_input['input_ids']).reshape(1,-1).to(device)
+    token_type_ids = torch.tensor(tokenized_input['token_type_ids']).reshape(1,-1).to(device)
+    word_ids = tokenized_input.word_ids()
+
+    logits = model(input_ids, attention_mask=attention_mask, token_type_ids = token_type_ids).logits[0].cpu()
+    classes = logits[:,0:2]
+    scores = torch.nn.functional.sigmoid(logits[:,2])
+    
+    print(f"\n-----inference-----\n")
+
+    print(f"\nwords:\n\n{words}\n")
+    print(f"\nlen(words): {len(words)}\n")
+
+    print(f"\nlen(gen_probs): {len(gen_probs)}\n")
+
+    print(f"\ntoken_type_ids:\n\n{token_type_ids}\n")
+    print(f"\nlen(token_type_ids):\n\n{len(token_type_ids[0])}\n")
+
+    print(f"\nword_ids:\n\n{word_ids}\n")
+    print(f"\nlen(word_ids):\n\n{len(word_ids)}\n")
+
+    print(f"\nlogits.shape: {logits.shape}\n")
+
+    print(f"\nclasses:\n\n{classes}\n")
+    print(f"\nlen(classes): {len(classes)}\n")
+
+    print(f"\nscores:\n\n{scores}\n")
+    print(f"\nlen(scores): {len(scores)}\n")
+
+    phrases = []
+    importance_scores = []
+    phrases_probs = []
+    i = 0
+    # num_skip = 0
+    while(i<len(scores)):
+        if word_ids[i] == None or token_type_ids[0][i] == 0:
+            i += 1
+            # num_skip += 1 
+            continue
+        # print(f"\nnum_skip: {num_skip}\n")
+        
+        cl = torch.argmax(classes[i,:])
+        if word_ids[i] == 0 or cl == 0: #we handle the edge case as well (beginning of the sentence)
+        # class=0のwordがphraseの始まり！！！
+            for j in range(i+1, len(scores)):
+                cl = torch.argmax(classes[j,:])
+                continue_word = False
+                for k in range(i,j):
+                    if word_ids[k] == word_ids[j]:
+                        continue_word = True
+                if (cl == 0 or  word_ids[j] == None) and continue_word == False:
+                    # cl=0となるタイミングでjを区切る
+                    break
+            
+            #find corresponding words by using word_ids
+            min_word_id = word_ids[i]
+            max_word_id = word_ids[j-1]
+            phrases.append(''.join(words[min_word_id:max_word_id+1]))
+            # phraseの先頭wordのscoreを採用
+            importance_scores.append(scores[i].item())
+            # 今求めたphraseの出力確率を求める
+            phrases_probs.append(max(gen_probs[min_word_id:max_word_id+1]))
+            i = j
+
+    print(f"\nphrases:\n\n{phrases}\n")
+
+    #maybe modify phrase with actual sentence
+    # real_phrases = []
+    # phrase_ind  = 0
+    # i = 0
+    # answer = answer.strip()
+
+
+    # while(i < len(answer)):
+    #     last_token_place  = -1
+    #     for j in range(i+1, len(answer)+1):
+
+    #         if  phrases[phrase_ind].strip().replace(" ", "") == answer[i:j].strip().replace(" ", ""):
+    #             last_token_place = j
+
+    #     real_phrases.append(answer[i:last_token_place].strip())
+    #     i = last_token_place
+    #     phrase_ind += 1
+    real_phrases = phrases
+            
+    return real_phrases, importance_scores, phrases_probs
+
 def evaluate_MARS(output, raw_data):
     device = "cuda:0"
     model_importance = torch.load('model_phrase.pth', map_location=device).to(device)
     tokenizer_importance = BertTokenizerFast.from_pretrained("bert-base-uncased")
-    for key in tqdm(raw_data):
-        print(f"\ninstance['question']:\n\n{output[int(key)]['question']}")
-        print(f"\ndecoded_word:\n\n{raw_data[key]['decoded_word'][0]}")
-        print(f"\nlen(decoded_word):\n\n{len(raw_data[key]['decoded_word'][0])}")
-        tokenized_input = tokenizer_importance.encode_plus(
-            output[int(key)]['question'],
-            output[int(key)]['pred'],
-            add_special_tokens=True,
-            return_token_type_ids=True,
-            is_split_into_words=True,
-            truncation=True,
-            max_length=512
+    for i in tqdm(range(len(output))):
+        question = output[i]['question']
+        print(f"\nquestion:\n\n{question}\n")
+        answer = output[i]['pred']
+        ans_word = raw_data[str(i)]['decoded_word'][0]
+        gen_probs = raw_data[str(i)]['gen_probs'].flatten()
+        print(f"\nanswer:\n\n{answer}\n")
+        phrases, importance_vector, phrases_probs = inference(
+            model_importance, tokenizer_importance, question, answer, ans_word, gen_probs
         )
-        attention_mask = torch.tensor(tokenized_input['attention_mask']).reshape(1,-1).to(device)
-        input_ids = torch.tensor(tokenized_input['input_ids']).reshape(1,-1).to(device)
-        token_type_ids = torch.tensor(tokenized_input['token_type_ids']).reshape(1,-1).to(device)
-        word_ids = tokenized_input.word_ids()
-        print(f"\ninput_ids: {input_ids.shape}\n")
-        print(f"\nattention_mask: {attention_mask.shape}\n")
-        print(f"\ntoken_type_ids: {token_type_ids.shape}\n")
-        logits = model_importance(input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids).logits[0].cpu()
-        importance_scores = torch.nn.functional.sigmoid(logits[:, 2])
-        print(f"\nlen(input_ids): {len(input_ids)}\n")
-        print(f"\ninput_ids:\n\n{input_ids}\n")
-        print(f"\nlen(importance_scores): {len(importance_scores)}\n")
-        print(f"\nimportance_scores:\n\n{importance_scores}\n")
+
+        print(f"\nreal phrases:\n\n{phrases}\n")
+        print(f"\nlen(real phrases): {len(phrases)}\n")
+
+        print(f"\nimportance_vector:\n\n{importance_vector}\n")
+        print(f"\nlen(importance_vector): {len(importance_vector)}")
+
+        print(f"\nphrases_probs:\n\n{phrases_probs}\n")
+        print(f"\nlen(phrases_probs): {len(phrases_probs)}")
         exit(0)
-        
 
 def main():
     '''
@@ -174,8 +267,10 @@ def main():
     args = parser.parse_args()
 
     # get output data
+    print(f"Loading output_{args.model}_{args.dataset} ...")
     with open(f"results/output_{args.model}_{args.dataset}.json") as f:
         output = json.load(f)
+    print(f"Finished loading output")
     
     # get raw data
     print(f"Loading raw_data_{args.model}_{args.dataset} ...")
