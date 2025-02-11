@@ -8,6 +8,11 @@ import torch
 from transformers import BertTokenizerFast
 import json
 import re
+from scipy.special import softmax
+import tensorflow as tf
+import tensorflow_hub as hub
+import tensorflow_text as text
+
 
 def auc_pr(y_true, y_pred):
     precision, recall, thresholds = precision_recall_curve(y_true, y_pred)
@@ -231,30 +236,124 @@ def inference(model, tokenizer, question, answer, ans_word, gen_probs):
             
     return real_phrases, importance_scores, phrases_probs
 
-def evaluate_MARS(output, raw_data):
-    device = "cuda:0"
-    model_importance = torch.load('model_phrase.pth', map_location=device).to(device)
-    tokenizer_importance = BertTokenizerFast.from_pretrained("bert-base-uncased")
+bem = hub.load('https://tfhub.dev/google/answer_equivalence/bem/1')
+device = torch.device("cuda:0")
+VOCAB_PATH = 'gs://cloud-tpu-checkpoints/bert/keras_bert/uncased_L-12_H-768_A-12/vocab.txt'
+vocab_table = tf.lookup.StaticVocabularyTable(
+    tf.lookup.TextFileInitializer(
+        filename=VOCAB_PATH,
+        key_dtype=tf.string,
+        key_index=tf.lookup.TextFileIndex.WHOLE_LINE,
+        value_dtype=tf.int64,
+        value_index=tf.lookup.TextFileIndex.LINE_NUMBER
+    ),
+    num_oov_buckets=1
+)
+cls_id, sep_id = vocab_table.lookup(tf.convert_to_tensor(['[CLS]', '[SEP]']))
+bert_tokenizer = text.BertTokenizer(
+    vocab_lookup_table=vocab_table, 
+    token_out_type=tf.int64, 
+    preserve_unused_token=True, 
+    lower_case=True
+)
+
+def bertify_example(example):
+    question = bert_tokenizer.tokenize(example['question']).merge_dims(1, 2)
+    reference = bert_tokenizer.tokenize(example['reference']).merge_dims(1, 2)
+    candidate = bert_tokenizer.tokenize(example['candidate']).merge_dims(1, 2)
+
+    input_ids, segment_ids = text.combine_segments(
+        (candidate, reference, question),
+        cls_id,
+        sep_id
+    )
+
+    return {'input_ids': input_ids.numpy(), 'segment_ids': segment_ids.numpy()}
+
+def pad(a, length=512):
+    return np.append(a, np.zeros(length - a.shape[-1], np.int32))
+
+def bertify_examples(examples):
+    input_ids = []
+    segment_ids = []
+    for example in examples:
+        example_inputs = bertify_example(example)
+        input_ids.append(pad(example_inputs['input_ids']))
+        segment_ids.append(pad(example_inputs['segment_ids']))
+
+    return {'input_ids': np.stack(input_ids), 'segment_ids': np.stack(segment_ids)}
+
+def get_importance_vector_BEM_thought(answer_text, question_text):
+    importance_vector = []
+
+    print(f"\nanswer_text:\n\n{answer_text}\n")
+    #words = answer.split()
+    thoughts = answer_text.split('\n\n')
+    print(f"\nthoughts:\n\n{thoughts}\n")
+    
+    #encoded_answer = sentence_model.encode(answer)
+
+    for i in range(len(thoughts)):
+        removed_answer = thoughts[:i] + thoughts[i+1:]
+
+        removed_answer = ' '.join(removed_answer)
+
+        print(f"\ni={i} | removed_answer:\n\n{removed_answer}\n")
+        bem_input = [{
+            'question': question_text,
+            'reference': answer_text,
+            'candidate': removed_answer
+        }]
+
+        inputs = bertify_examples(bem_input)
+        print(f"\ninputs:\n\n{inputs}\n")
+        raw_outputs = bem(inputs)
+        bem_score = float(softmax(np.squeeze(raw_outputs))[1])
+        score = 1-bem_score
+        importance_vector.append(score)
+
+    importance_vector = np.array(importance_vector)
+
+    return importance_vector, thoughts
+
+def evaluate_MARS(output):
+    # ---------------------- use original BEM ----------------------
     for i in tqdm(range(len(output))):
-        question = output[i]['question']
-        print(f"\nquestion:\n\n{question}\n")
-        answer = output[i]['pred']
-        ans_word = raw_data[str(i)]['decoded_word'][0]
-        gen_probs = raw_data[str(i)]['gen_probs'].flatten()
-        print(f"\nanswer:\n\n{answer}\n")
-        phrases, importance_vector, phrases_probs = inference(
-            model_importance, tokenizer_importance, question, answer, ans_word, gen_probs
+        answer_text = output[i]['pred']
+        question_text = output[i]['question']
+        importance_scores, thoughts = get_importance_vector_BEM_thought(
+            answer_text=answer_text, question_text=question_text
         )
-
-        print(f"\nreal phrases:\n\n{phrases}\n")
-        print(f"\nlen(real phrases): {len(phrases)}\n")
-
-        print(f"\nimportance_vector:\n\n{importance_vector}\n")
-        print(f"\nlen(importance_vector): {len(importance_vector)}")
-
-        print(f"\nphrases_probs:\n\n{phrases_probs}\n")
-        print(f"\nlen(phrases_probs): {len(phrases_probs)}")
+        print(f"\nimportance_scores:\n\n{importance_scores}\n")
+        print(f"\nlen(importance_scores):\n\n{len(importance_scores)}\n")
+        print(f"\nthoughts:\n\n{thoughts}\n")
+        print(f"\nlen(thoughts):\n\n{len(thoughts)}\n")
         exit(0)
+
+    # ---------------------- use trained BERT ----------------------
+    # device = "cuda:0"
+    # model_importance = torch.load('model_phrase.pth', map_location=device).to(device)
+    # tokenizer_importance = BertTokenizerFast.from_pretrained("bert-base-uncased")
+    # for i in tqdm(range(len(output))):
+    #     question = output[i]['question']
+    #     print(f"\nquestion:\n\n{question}\n")
+    #     answer = output[i]['pred']
+    #     ans_word = raw_data[str(i)]['decoded_word'][0]
+    #     gen_probs = raw_data[str(i)]['gen_probs'].flatten()
+    #     print(f"\nanswer:\n\n{answer}\n")
+    #     phrases, importance_vector, phrases_probs = inference(
+    #         model_importance, tokenizer_importance, question, answer, ans_word, gen_probs
+    #     )
+
+    #     print(f"\nreal phrases:\n\n{phrases}\n")
+    #     print(f"\nlen(real phrases): {len(phrases)}\n")
+
+    #     print(f"\nimportance_vector:\n\n{importance_vector}\n")
+    #     print(f"\nlen(importance_vector): {len(importance_vector)}")
+
+    #     print(f"\nphrases_probs:\n\n{phrases_probs}\n")
+    #     print(f"\nlen(phrases_probs): {len(phrases_probs)}")
+    #     exit(0)
 
 def main():
     '''
@@ -268,16 +367,16 @@ def main():
 
     # get output data
     print(f"Loading output_{args.model}_{args.dataset} ...")
-    with open(f"results/output_{args.model}_{args.dataset}.json") as f:
+    with open(f"data/yoshie/mtrths/output_{args.model}_{args.dataset}.json") as f:
         output = json.load(f)
     print(f"Finished loading output")
     
     # get raw data
-    print(f"Loading raw_data_{args.model}_{args.dataset} ...")
-    shelve_raw_data = shelve.open(f"results/raw_data_{args.model}_{args.dataset}")
-    raw_data = dict(shelve_raw_data)
-    shelve_raw_data.close()
-    print("Finished loading raw_data")
+    # print(f"Loading raw_data_{args.model}_{args.dataset} ...")
+    # shelve_raw_data = shelve.open(f"results/raw_data_{args.model}_{args.dataset}")
+    # raw_data = dict(shelve_raw_data)
+    # shelve_raw_data.close()
+    # print("Finished loading raw_data")
 
     # prepare dataframe
     result_df = pd.DataFrame() # is_wrong and uncertainty scores
@@ -286,7 +385,7 @@ def main():
     # evaluate
     # evaluation_whole_level = evaluate_whole_level(raw_data)
     # evaluation_thought_level = evaluate_thought_level(raw_data)
-    evaluation_MARS = evaluate_MARS(output, raw_data)
+    evaluation_MARS = evaluate_MARS(output)
 
     # # stock uncertainty scores
     # result_df['is_wrong'] = evaluation_whole_level['is_wrong']

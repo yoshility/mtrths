@@ -41,7 +41,7 @@ if __name__ == '__main__':
     is_correct_sum = 0
     not_correct_sum = 0
     print(f"not_correct_sum: {not_correct_sum}")
-    raw_data = shelve.open(f"raw_data_{args.model}_{args.dataset}") # is_correct, probs, entropy, ...
+    raw_data = shelve.open(f"/data/yoshie/mtrths/raw_data_{args.model}_{args.dataset}") # is_correct, probs, entropy, ...
     NUM_INSTANCES = args.num_instances
     # NUM_INSTANCES = args.num_instances if args.num_instances <= len(ds) else len(ds)
 
@@ -66,7 +66,7 @@ if __name__ == '__main__':
 
     raw_data.close()
 
-    with open(f"output_{args.model}_{args.dataset}.json", "w", encoding="utf-8") as f:
+    with open(f"/data/yoshie/mtrths/output_{args.model}_{args.dataset}.json", "w", encoding="utf-8") as f:
         json.dump(output, f, indent=4, ensure_ascii=False)
         print(f"output_{args.model}_{args.dataset}.json generated")
     

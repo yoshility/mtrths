@@ -1,14 +1,17 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaConfig
 import torch
 import utils
 
 class Llama3:
     def __init__(self):
         self.model_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        # config = LlamaConfig.from_pretrained(self.model_id)
+        # config.rope_scaling = {"type": "linear", "factor": 8.0}
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
-            device_map="auto"
+            device_map="auto",
+            # config=config
         )
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
     
@@ -110,7 +113,6 @@ class Llama3:
 
         res = {
             "gen_sequences": gen_sequences,
-            "attention_mask": 
             "scores": torch.stack(scores).float().cpu(),
             "gen_probs": gen_probs,
             "gen_sequences": gen_sequences,
