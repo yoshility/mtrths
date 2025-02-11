@@ -2,7 +2,7 @@
 ```
 Questions
 |
-| llama3.py
+| main.py
 |
 output_{model}_{dataset}.json ... model output
 raw_data_{model}_{dataset}.db ... probs and entropy
