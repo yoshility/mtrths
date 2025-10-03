@@ -66,6 +66,7 @@ if __name__ == '__main__':
 
     raw_data.close()
 
+    # TODO: まとめて保存してるの良くない
     with open(f"/data/yoshie/mtrths/output_{args.model}_{args.dataset}.json", "w", encoding="utf-8") as f:
         json.dump(output, f, indent=4, ensure_ascii=False)
         print(f"output_{args.model}_{args.dataset}.json generated")

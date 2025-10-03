@@ -54,7 +54,9 @@ class Llama3:
         gen_sequences: (1, n (output w/o input)) (e.g. (1, 155))
                 = [[1271, 1505, ..., 128009]]
         '''
-        decoded_text = [self.tokenizer.decode(i, skip_special_tokens=True) for i in gen_sequences] # i = gen_sequences[0]
+        # decoded_text = [self.tokenizer.decode(i, skip_special_tokens=True) for i in gen_sequences] # i = gen_sequences[0]
+        decoded_text = [self.tokenizer.decode(i) for i in gen_sequences]
+        print(f"\ndecoded_text:\n{decoded_text}\n")
         '''
         decoded_text: ['To find the ...']
         '''
