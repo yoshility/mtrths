@@ -43,12 +43,15 @@ for step in range(270): # max token number
         past_key_values=past_key_values,
         use_cache=True
     )
+
+    temperature = 0.7
     
     logits = outputs.logits
     past_key_values = outputs.past_key_values
     
     # choose the next token
-    probs = torch.softmax(logits[:, -1, :], dim=-1)
+    adjusted_logits = logits[:, -1, :] / temperature
+    probs = torch.softmax(adjusted_logits, dim=-1)
     next_token_id = torch.multinomial(probs, num_samples=1)
     
     # add to generated tokens
