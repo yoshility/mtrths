@@ -1,8 +1,6 @@
+import copy
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-
-# input
-prompt = "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
 
 # model and tokenizer
 model_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
@@ -10,13 +8,14 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16, device_map="auto")
 model.eval()
 
-# use chat template -> avoid hallucination
-messages = [
-    {"role": "system", "content": "You are a helpful assistant solving math problems."},
-    {"role": "user", "content": prompt}
-]
+def top_k_logits(logits, k):
+    v, ix = torch.topk(logits, k)
+    out = logits.clone()
+    out[out < v[..., -1, None]] = -float('Inf')
+    return out
 
 def generate_one_step(step) -> str:
+    print("----------- Start generate_one_step -----------")
     # stepはsystem,user(,assistant)をすべて含む
     # これに対してダブル改行が出るまで続きを生成する
     input_text = tokenizer.apply_chat_template(
@@ -45,25 +44,28 @@ def generate_one_step(step) -> str:
         
         # choose the next token
         adjusted_logits = logits[:, -1, :] / temperature
-        probs = torch.softmax(adjusted_logits, dim=-1)
+        topk_logits = top_k_logits(adjusted_logits, k=20)
+        probs = torch.softmax(topk_logits, dim=-1)
         next_token_id = torch.multinomial(probs, num_samples=1)
         
         # add to generated tokens
         generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
         
-        # decode to text
-        # print(tokenizer.decode(next_token_id[0]), end=' ')
+        # decode to text (ちゃんとダブル改行検知できてるかチェック)
+        decoded_next_token_id = tokenizer.decode(next_token_id[0])
+        enter_exist = '\n\n' in decoded_next_token_id
+        print(f"[{decoded_next_token_id}]:[{enter_exist}]", end=" ")
 
         # if \n\n or EOS, stop generation
         if "\n\n" in tokenizer.decode(next_token_id[0]):
-            print("\\n\\n detected. Stopping generation.")
+            print("\n- \\n\\n detected. Stopping generation.")
             break
         elif next_token_id.item() == tokenizer.eos_token_id:
-            print("EOS detected. Stopping generation.")
+            print("\n- EOS detected. Stopping generation.")
             break
     
     generated_text = ''.join([tokenizer.decode(w, skip_special_tokens=True) for w in generated_ids[0]][(input_tokens.input_ids.shape[-1]):])
-    next_step = step.copy()
+    next_step = copy.deepcopy(step)
     if len(step) == 2: # systemとuserのみのとき
         next_step.append(
             {"role": "assistant", "content": generated_text}
@@ -77,6 +79,7 @@ def static_value(step: str) -> float:
 
 # min-max -> max-max
 def max_max(step: str, depth: int):
+    print(f"\n[Start max-max (depth={depth})]\n")
     # 読み深さに達した
     if depth == 0:
         print("読み深さに達した")
@@ -84,16 +87,16 @@ def max_max(step: str, depth: int):
     # 子ノード生成
     children = []
     tokenized_children = []
-    for _ in range(3):
+    for i in range(3):
+        print(f"\n[generate children[{i}]]\n")
         next_step, tokenized_next_step = generate_one_step(step)
         children.append(next_step)
         tokenized_children.append(tokenized_next_step)
-    print(f"\nchildren[0]:\n{children[0]}\n")
-    print(f"\ntokenized_children[0]:\n{tokenized_children[0]}\n")
     
     max_score = -1e4
     max_index = 0
     for i in range(3):
+        print(f"\n[max_max(children[{i}])]\n")
         score, _, _ = max_max(children[i], depth-1)
         if score > max_score:
             max_score = score
@@ -102,13 +105,22 @@ def max_max(step: str, depth: int):
     return max_score, children[max_index], tokenized_children[max_index]
 
 # 次のステップを決める
+
 # 初期化
+# use chat template -> avoid hallucination
+# input
+prompt = "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
+messages = [
+    {"role": "system", "content": "You are a helpful assistant solving math problems."},
+    {"role": "user", "content": prompt}
+]
 now_step = messages
-# 生成が終わるまで
+
+# 生成が終わるまでmin-maxを繰り返す
 while True:
     _, next_step, tokenized_next_step = max_max(
         step=now_step,
-        depth=1
+        depth=2
     )
     now_step = next_step
     print(f"\nnext_step:\n{next_step}\n")
