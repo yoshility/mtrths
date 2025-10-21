@@ -2,6 +2,8 @@ import copy
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+from prm import prm
+
 # model and tokenizer (global)
 model_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -17,7 +19,7 @@ def top_k_logits(logits, k):
     out[out < v[..., -1, None]] = -float('Inf')
     return out
 
-def generate_one_step(step) -> str:
+def generate_one_step(step):
     # stepはsystem,user(,assistant)をすべて含む
     # これに対してダブル改行が出るまで続きを生成する
     input_text = tokenizer.apply_chat_template(
@@ -76,8 +78,9 @@ def generate_one_step(step) -> str:
         next_step[2]["content"] += generated_text
     return next_step, generated_ids
 
-def static_value(step: str) -> float:
-    return 1.0
+def static_value(step) -> float:
+    step_reward = prm(step)
+    return step_reward
 
 # min-max -> max-max
 def max_max(step: str, child_id: int, depth: int):
@@ -101,17 +104,19 @@ def max_max(step: str, child_id: int, depth: int):
     for i in range(3):
         print(f"\n[max_max(children[{child_id+str(i)}])]\n")
         score, _, _ = max_max(children[i], child_id+str(i), depth-1)
+        print(f"\nscore[{child_id+str(i)}]: {score}\n")
         if score > max_score:
             max_score = score
             max_index = i
+    print(f"\nChoose children[{max_index}] (score: {max_score})\n")
     
     return max_score, children[max_index], tokenized_children[max_index]
 
 # 繰り返し次のステップを決めていく
 if __name__ == '__main__':
     # 初期化
-    # use chat template -> avoid hallucination
-    # input
+    # Use chat template -> avoid hallucination
+    # Input
     prompt = "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
     messages = [
         {"role": "system", "content": "You are a helpful assistant solving math problems."},
