@@ -61,8 +61,8 @@ def prm(step):
     token_masks = (input_ids == step_sep_id)
     step_reward = make_step_rewards(outputs[0], token_masks)
     # step_reward: [[0.9921875, 0.2333984375, 0.6796875, 0.94140625]]
-    return step_reward
-    # return step_reward[0][-1]
+    # return step_reward
+    return step_reward[0][-1]
 
 '''
 問題点：
